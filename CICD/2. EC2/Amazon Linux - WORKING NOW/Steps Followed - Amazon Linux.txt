@@ -1,0 +1,317 @@
+We will first provision an EC2 Instance and install all required packages and code manually to verify if code behaves as expected.
+Once verified, we will automate the installation in CodeCommit, CodeBuild, CodeDeploy, CodePipeline.
+
+
+================================================ Manual Steps ====================================================
+
+
+Launch an EC2 Amazon Linux instance with public IP enabled, security group allowing SSH/HTTP/HTTPS traffic on ports 22, 80, 443 / also port 5000, associated with correct key pair and IAM role having access to S3
+
+Connect
+
+sudo yum install -y python3-pip (install python)
+
+sudo pip3 install scikit-learn==0.24.0 (install sklearn)
+
+sudo pip3 install flask (install flask)
+
+sudo pip3 install xgboost (if using xgb model)
+
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/handler.py .
+
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/xgb_gridsearch_regressor.pkl .
+
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/random_forest_regressor.pkl .
+
+python3 handler.py (this is the python code app that uses the model to predict price - this is the endpoint)
+
+Copy the Public DNS of the EC2 instance and run below in POSTMAN:
+
+POST:  http://ec2-18-212-217-9.compute-1.amazonaws.com:5000/car_price_predict
+BODY: Raw: JSON:
+{   "symboling": 2,
+    "normalized-losses": 164,
+    "wheel-base": 99.8,
+    "make": "audi",
+    "fuel-type": "gas",
+    "aspiration": "std",
+    "num-of-doors": "four",
+    "body-style": "sedan",
+    "drive-wheels": "fwd",
+    "engine-location": "front",
+    "length": 176.60,
+    "width": 66.20,
+    "height": 54.30,
+    "curb-weight": 2337,
+    "engine-type": "ohc",
+    "num-of-cylinders": "four",
+    "engine-size": 109, 
+    "fuel-system": "mpfi",
+    "bore": 3.19,
+    "stroke": 3.40,
+    "compression-ratio": 10,
+    "horsepower": 102,
+    "peak-rpm": 5500,
+    "city-mpg": 24,
+    "highway-mpg": 30
+}
+
+If this is working, we can also try below from the same EC2 instance - different session ofcourse. This will be useful for CodeBuild Unit Testing.
+
+python3 (Go to python prompt and then execute below code)
+
+import requests
+
+url = 'http://0.0.0.0:5000/car_price_predict'
+
+r = requests.post(url, json = {
+    "symboling": 2,
+    "normalized-losses": 164,
+    "wheel-base": 99.8,
+    "make": "audi",
+    "fuel-type": "gas",
+    "aspiration": "std",
+    "num-of-doors": "four",
+    "body-style": "sedan",
+    "drive-wheels": "fwd",
+    "engine-location": "front",
+    "length": 176.60,
+    "width": 66.20,
+    "height": 54.30,
+    "curb-weight": 2337,
+    "engine-type": "ohc",
+    "num-of-cylinders": "four",
+    "engine-size": 109, 
+    "fuel-system": "mpfi",
+    "bore": 3.19,
+    "stroke": 3.40,
+    "compression-ratio": 10,
+    "horsepower": 102,
+    "peak-rpm": 5500,
+    "city-mpg": 24,
+    "highway-mpg": 30
+})
+
+print(r.text)
+
+if r.text == '[12815.2]':
+   print('yes')
+else:
+   print('no')
+
+================================================ Configure Server for Code Deploy ====================================================
+
+
+####### Phase 1: Use Code Commit, Code Deploy, Code Build to deploy your app on one Ec2 Test instance and test it there ########
+
+
+-- Provision one Ec2 Test instance
+
+Launch an EC2 Amazon Linux / Ubuntu instance with public IP enabled, security group allowing SSH/HTTP/HTTPS traffic on ports 22, 80, 443 / also port 5000, associated with correct key pair and IAM role having access to S3. One important thing to do here is to associate an appropriate tag for the instance. Code Deploy needs tags to identify where to install prequisites and other code. I used a Tag with Name: Environment and Value: Test.
+As seen in the manual steps, this is the server where the machine learning app will run.
+This is where we need to install all pre-requisites and copy our code.
+
+-- So, we will install CodeDeploy agent on this server.
+
+# Installing CodeDeploy Agent
+
+sudo yum install -y ruby wget
+wget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install
+chmod +x ./install
+sudo ./install auto
+
+# Checking CodeDeploy Agent status
+sudo service codedeploy-agent status
+
+Also, I created a folder structure at the root of the Ec2 instance for the code base.
+This folder is not needed actually because, even though the artifacts are downloaded here, the Code Deploy picks the scripts directly from source / code commit artifacts
+cd /tmp
+mkdir ml-app
+
+-- Code Commit
+
+Lets move to the AWS Console now.
+Lets add a Code Commit Repository (non-root IAM user) with handler.py, .pkl file, appspec.yml file and the shell scripts as in 
+C:\Vinod\AWSSagemaker\Deployment\CICD\2. EC2\Amazon Linux or C:\Vinod\AWSSagemaker\Deployment\CICD\2. EC2\Amazon Linux
+
+To setup git clone on your machine (EC2 instance) do the following:
+Go to Connection Steps and copy the git clone command 
+git clone https://git-codecommit.us-east-1.amazonaws.com/v1/repos/vinod-ml-app-repository -> you will be asked for the user Git credentials created above.
+(sudo yum install git -> if git not available)
+Then, to push from machine to repo:
+git status
+git add .
+git commit -am "comments"
+git push
+git status
+
+To push changes from local to repo:
+(
+You can change a script file on your local machine, upload to S3 and copy to Ec2 instance using below command and the pipeline will get triggered
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/InstallCopyPrerequisites.sh .
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/ApplicationStart.sh .
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/ApplicationStop.sh .
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/buildspec.yml .
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/handler_unit_test.py .
+)
+
+Note, how in ApplicationStart.sh, we are using python3 /tmp/ml-app/py/handler.py > /dev/null 2> /dev/null < /dev/null &
+instead of python3 /tmp/ml-app/py/handler.py 
+If we use the latter, the ApplicationStart hook will never end.
+Also, note the use of ApplicationStop hook using ApplicationStop.sh at the beginning.
+This will ensure the service is stopped at the beginning of every new deployment and is essential to make sure the changes reflect at the end of the deployment when the application is started again.
+
+-- Code Deploy
+
+Next, lets create a CodeDeploy IAM Role using the managed AWS CodeDeploy Role that has access related to autoscaling, load balancing and tag access on resources.
+Then comes creation of a Code Deployment Application and Code Deployment Group.
+Code Deployment Group is created using the IAM Role created above and the "Environment" Tag of the EC2 instance where we want the deployment to happen.
+The Compute Type is EC2 - not ECS or Lambda for this use case.
+Since we have one instance only, we will use the In-place and AllAtOnce deploymeent settings and also we will not be enabling Load balancing now.
+
+-- Code Pipeline with Code Commit and Code Deploy
+
+Then lets create a Code Pipeline with Source stage as above Code Commit repo, skip build stage and the deployment stage as the above Code Deploy Application / Deployment group.
+
+Execute the Pipeline by using "Release Change" in the Code Pipeline UI or by making a change in the Code Commit repo.
+If deployment fails, need to debug
+If deployment is successful, connect to the EC2 instance and verify by running below code:
+If "yes" is printed, the deployment is successful.
+
+python3 (Go to python prompt and then execute below code)
+
+import requests
+
+url = 'http://0.0.0.0:5000/car_price_predict'
+
+r = requests.post(url, json = {
+    "symboling": 2,
+    "normalized-losses": 164,
+    "wheel-base": 99.8,
+    "make": "audi",
+    "fuel-type": "gas",
+    "aspiration": "std",
+    "num-of-doors": "four",
+    "body-style": "sedan",
+    "drive-wheels": "fwd",
+    "engine-location": "front",
+    "length": 176.60,
+    "width": 66.20,
+    "height": 54.30,
+    "curb-weight": 2337,
+    "engine-type": "ohc",
+    "num-of-cylinders": "four",
+    "engine-size": 109, 
+    "fuel-system": "mpfi",
+    "bore": 3.19,
+    "stroke": 3.40,
+    "compression-ratio": 10,
+    "horsepower": 102,
+    "peak-rpm": 5500,
+    "city-mpg": 24,
+    "highway-mpg": 30
+})
+
+print(r.text)
+
+if r.text == '[12815.2]':
+   print('yes')
+else:
+   print('no')
+
+
+-- Test using Code Build
+
+Next, we will test using code build project -> note that we cannot use 0.0.0.0 url like the way we test from EC2 instance.
+The Code Build does not run on our EC2 instance .. so we need to provide the actual Public IP / DNS of the EC2 instance in the python script that is triggered by the buildspec.yml
+
+
+####### Phase 2: Use Manual approval, Code Deploy to deploy your app on an ASG running behind a Load balancer ########
+
+
+--  manual approval
+
+Created an SNS Topic prod-approval-topic and an email subscription for this topic -> make sure you confirm the subscription notice you get on the mail id
+In the code pieline, after the Test, add a Stage for Manual approval using this topic.
+
+-- Finally, Code Deploy to Prod must be added in the code pipeline: We have to create Target group, Load Balancer, Launch template, ASG.
+
+-- Target Group steps:
+Created a target type -> Instances
+Target group Protocol: HTTP and Port 5000 (open main traffic port at instance level)
+Health check path: /health_check 
+Health check port is the same as the Traffic port
+No need to register targets now.
+
+-- ALB Steps:
+Internet facing
+Choose the VPC and the AZs in which you want the load balancing to happen
+Associate the security group that allows traffic on Port 5000 (allow port at ELB level)
+Add Listener that checks for connection requests on Port 5000 (open main traffic port at ELB level) and redirect to the Target Group created above
+
+-- Launch Template Steps:
+Choose Amazon Linux2 OS, t2.micro, Key pair, security group that allows traffic on port 5000, Enable Public IP, IAM role that has access to S3 and below user data to install code deploy:
+#!/bin/bash
+sudo yum install -y ruby wget
+wget https://aws-codedeploy-us-east-1.s3.us-east-1.amazonaws.com/latest/install
+chmod +x ./install
+sudo ./install auto
+
+-- ASG Steps:
+Use the launch template created above
+Choose the AZs in which you want your instances to be launched - could be the same as the AZs where your ALB will direct your traffic to.
+Attach the ASG to the ALB-Target group created above
+Turn on the ELB health checks
+Health check grace period -> 1800 seconds (so that within 30 mins, we have our app deployed and /health_check works)
+Choose the ASG size and the scaling policy (Ave CPU Utilisation, Ave neetwork in, Ave network out, Ave LB request count per target or None -> static group)
+
+-- Code Deploy Application for Prod:
+Choose environment configuration as Amazon Ec2 Auto Scaling Groups and choose the ASG created above
+Enable load balancing and choose the target group created earlier.
+
+Run the pipeline -> you will get an email requesting approval and the link will take you to the pipeline stage, where you can Approve or Reject.
+Upon approval, the Deploy-Prod will happen.
+Verify by logging on to another EC2 instance and executing below commands:
+
+python3 (Go to python prompt and then execute below code)
+
+import requests
+
+url = 'http://my-alb-1343645433.us-east-1.elb.amazonaws.com:5000/car_price_predict'
+
+r = requests.post(url, json = {
+    "symboling": 2,
+    "normalized-losses": 164,
+    "wheel-base": 99.8,
+    "make": "audi",
+    "fuel-type": "gas",
+    "aspiration": "std",
+    "num-of-doors": "four",
+    "body-style": "sedan",
+    "drive-wheels": "fwd",
+    "engine-location": "front",
+    "length": 176.60,
+    "width": 66.20,
+    "height": 54.30,
+    "curb-weight": 2337,
+    "engine-type": "ohc",
+    "num-of-cylinders": "four",
+    "engine-size": 109, 
+    "fuel-system": "mpfi",
+    "bore": 3.19,
+    "stroke": 3.40,
+    "compression-ratio": 10,
+    "horsepower": 102,
+    "peak-rpm": 5500,
+    "city-mpg": 24,
+    "highway-mpg": 30
+})
+
+print(r.text)
+
+if r.text == '[12815.2]':
+   print('yes')
+else:
+   print('no')
+
+

@@ -1,0 +1,16 @@
+#!/bin/bash
+version: 0.0
+os: linux
+files:
+   - source: /
+     destination: /tmp/ml-app
+hooks:
+   BeforeInstall:
+      - location: scripts/InstallCopyPrerequisites.sh
+        runas: root
+   AfterInstall:
+      - location: scripts/ApplicationStop.sh
+        runas: root
+   ApplicationStart:
+      - location: scripts/ApplicationStart.sh
+        runas: root

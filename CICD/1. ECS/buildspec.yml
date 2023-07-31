@@ -1,0 +1,39 @@
+version: 0.2
+env:
+    variables:
+        ECR_REPO_NAME: vinod-ml-repo  
+    parameter-store:
+        AWS_ACCOUNT_ID: /ml-apps/account_id          
+
+phases:
+    install:
+        runtime-versions: 
+            python: 3.11
+    pre_build:
+        commands:
+            - echo "Logging into AWS ECR"
+            - ECR_MAIN_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+            - echo "The ECR_MAIN_URI is ${ECR_MAIN_URI}"
+            - aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_MAIN_URI}
+            - echo "Logged into AWS ECR"
+            - echo "Set the image tag and full image uri variables for later use"
+            - IMAGE_TAG=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+            - ECR_IMAGE_URI="${ECR_MAIN_URI}/${ECR_REPO_NAME}:${IMAGE_TAG}"
+            - echo "The IMAGE_TAG is ${IMAGE_TAG}"
+            - echo "The ECR_IMAGE_URI is ${ECR_IMAGE_URI}"
+    build:
+        commands:
+            - echo "docker build started"
+            - docker build -t car-price-predictor-app:$IMAGE_TAG .
+            - echo "docker build completed"
+    post_build:
+        commands:
+            - echo "push the docker image to ECR - started"
+            - docker tag car-price-predictor-app:$IMAGE_TAG ${ECR_IMAGE_URI}
+            - docker push ${ECR_IMAGE_URI}
+            - printf '[{"name":"vinod-ml-repo","imageUri":"%s"}]' $ECR_IMAGE_URI > imagedefinitions.json
+            - echo "push the docker image to ECR - completed"
+artifacts:
+    files:
+        - '**/*'
+   

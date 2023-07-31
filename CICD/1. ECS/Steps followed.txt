@@ -1,0 +1,193 @@
+Create a non-root IAM user vinods_web_console
+
+Go to Security Credentials of this IAM user -> Generate and Save HTTPS Git Credentials
+
+=================
+
+Create a code commit repository with non-root IAM user (not advisable using root user)
+
+Go to Connection Steps and copy the git clone command 
+
+git clone https://git-codecommit.us-east-1.amazonaws.com/v1/repos/vinod-ecs-repository -> you will be asked for the user Git credentials created above.
+
+=================
+
+In your machine (the EC2 ubuntu instance which we use to create docker images), run the git clone command
+If git client is not installed on your machine, use sudo apt-get install git to install the client.
+
+One new folder - vinod-ecs-repository, the same name as the git repo - will be created on the ubuntu EC2 instance. Go inside this folder.
+
+Run the command git status -> you will get the result On master branch and No commits yet. This shows git repo has been setup and cloned correctly.
+
+Install awscli on the Ec2 instance
+
+Copy the Dockerfile, python app and pickle file from S3 -> 
+
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/Dockerfile .
+
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/handler.py .
+
+aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/random_forest_regressor.pkl .
+
+Now try git status
+
+Then git add .
+
+Then git commit -am "Dockefile checkin"
+
+Then git push
+
+Then git status. You can also got to the console and check in the code commit repo if your files are present thr.
+
+The Code Commit repo is set now. 
+
+=================
+
+The next step is Code Build -> buildspec.yml
+
+We will need ECR repo URL for buildspec.yml, so first create the ECR repo using below commands from your EC2 instance:
+
+aws configure
+aws ecr create-repository --repository-name vinod-ecr-ml-repo --region us-east-1 (a private repo will be created)
+
+Then create the buildspec.yml and upload to S3 (this should do docker build, login to ECR and finally do docker push into ECR)
+
+Copy this to your git cloned folder on EC2 instance using the command: aws s3 cp s3://vinod-ml-sagemaker-bucket/car_price/buildspec.yml .
+
+Now check this in to Code commit repo using the commands:
+
+git status
+
+git add .
+
+git commit -am "buildspec checkin"
+
+git push
+
+git status
+
+===================
+
+Next, create a Code Build project 
+
+Configure the source provider for the code build project - it can be S3, Github, Bitbucket etc. We will choose Code Commit and provide the Code commit repo name and branch name.
+
+Use a Managed image (where th build will happen), choose the OS. 
+With Ubuntu, 
+With Amazon Linux, RUN pip3 install scikit-learn worked and with Ubuntu, RUN pip3 install scikit-learn=0.24.0 worked
+Provide a role with appropriate access - should have ssm access, ecr access
+
+Provide a build spec file -> if your build spec is buildspec.yml no need to give the name - this is the default name. Else provide the name.
+Note the usage of environment variables in the buildspec file - AWS_REGION is available readily and AWS_ACCOUNT_ID is taken from SSM parameter store.
+
+You can choose to save your artifacts in an S3 bucket.
+
+Start the build project
+
+Verify the logs that docker build / push has happened and verify in ECR that the image is now available.
+
+
+Note: Make sure Artifacts to S3 is enabled. It is not enough iof your buildspec.yml alone has the "artifacts" section.
+You can configure an S3 bucket here, but this bucket will be used only when you test the Code Build project as a standalone component.
+When Code Build is part of a Code pipeline, the bucket of the pipeline will be used and not the bucket of the build project.
+
+Also, note that, only when you enable Artifacts in the build project, in the Deploy component of the pipeline that will come as the next step, this file will be shown in the dropdown of the Input artifacts. Else, only Source Artifact i.e. Code Commit repo, will be displayed.
+
+========================
+
+The next component is deployment. We are not using Code Deploy here. We will use ECS for deployment. 
+To use ECS for code deployment, we first need to create cluster, task definition-container details and a service for the task/container to run.
+Steps below:
+
+We will create an ECS cluster in a VPC and required subnets.
+This cluster is configured to support both AWS Fargate (Serverless) as well as EC2 instances.
+Because we have selected EC2 instances as well, we will be asked to create a new ASG or use an existing ASG. 
+We will create a new ASG with a min of 0 and max of 5 instances. Choose the required OS (Amazon Linux) / instance type (t2.micro) for the Ec2 instances.
+
+Next step is to create a Task definition.
+Here we will choose the Infra as AWS fargate only - 
+EC2 instances can be used for another task and deployed in the same cluster created above because the cluster supports both Fargate and EC2 instances. 
+Choose the OS (Amazon Linux), role and size (CPU, memory) for the task. 
+Note that one task can include multiple containers with multiple apps - so all apps must run on the same OS, and share the task size. Moreover the role must be apt for all containers.
+Finally, provide the details for one container atleast - name of the container which is the same as the name of the ECR repo and the image URI. Open the required container port.
+
+Now, we deploy this task as a Service.
+Choose the cluster where you want your Service to run.
+Specify the desired number of tasks to launch -> 2
+Deployment type is defaulted to Rolling and min/max running tasks % is set to 100% and 200% respectively.
+This means, during a rolling deployment, there will be a min of 2 tasks. 1 or 2 extra tasks can be provisioned during the deployment and these will be shutdown after deployment.
+You can think of tasks as EC2 instances (Tasks have Private IPs)
+Select the VPC / subnets where you want your service to run.
+You can choose to load balance your service - by creating an ALB and a target group. Ensure to add the health check path as /health_check. 
+I manually overrided the health check port to 5000 in the Target group created via ECS console.
+You can also auto-scale your service (min x number of tasks and max y number of tasks) based on cloudwatch alarms or based on ave CPU utilization, ave memory utilization or ALB request count per target.
+
+
+Note: Don't confuse the auto-scaling of tasks with the auto-scaling of instances in the EC2 ASG configured at the time of cluster provisioning.
+The auto-scaling of instances in the EC2 ASG configured at the time of cluster provisioning, will come into efefct only if we decide to go with Ec2 infra for any task.
+The auto-scaling of service is irrespective of the infra.
+
+Wait till the Service is deployed successfully.
+Check the load balancer and target groups -> there must be 2 tasks.
+The DNS of the load balancer will be needed for the verification below.
+
+Note: Once the Service is tested successfully, add this in the Code Pipeline.
+
+To verify if the Service is working as expected, provision another EC2 instance and execute below commands.
+
+python3
+
+import requests
+
+url = 'http://vinod-ml-app-alb-11880309.us-east-1.elb.amazonaws.com:5000/car_price_predict'
+
+r = requests.post(url, json = {
+    "symboling": 2,
+    "normalized-losses": 164,
+    "wheel-base": 99.8,
+    "make": "audi",
+    "fuel-type": "gas",
+    "aspiration": "std",
+    "num-of-doors": "four",
+    "body-style": "sedan",
+    "drive-wheels": "fwd",
+    "engine-location": "front",
+    "length": 176.60,
+    "width": 66.20,
+    "height": 54.30,
+    "curb-weight": 2337,
+    "engine-type": "ohc",
+    "num-of-cylinders": "four",
+    "engine-size": 109, 
+    "fuel-system": "mpfi",
+    "bore": 3.19,
+    "stroke": 3.40,
+    "compression-ratio": 10,
+    "horsepower": 102,
+    "peak-rpm": 5500,
+    "city-mpg": 24,
+    "highway-mpg": 30
+})
+
+print(r.text)
+
+if r.text == '[12815.2]':
+   print('yes')
+else:
+   print('no')
+
+
+
+=======================
+
+Now create a Code Pipeline with source stage as the appropriate Code Commit repo / branch, build stage as the Code build project with the appropriate buildspec.yml created earlier and the deploy stage as the ECS. You will provide the cluster name / service name as created in the previous step and the Image definitions file as imagedefinitions.json -> the output artifact of the build stage that has the container name with the repo URI:tag.
+
+======================
+
+Now, if you make a change in buildspec.yml or Dockerfile and checkin the changes into CodeCommit repo, the Code Pipelinee will get triggered, the build will happen as per the latest buildspec.yml / Dockerfile -> 
+you will see an image with a new tag in the ECR repo, 
+you will see a new revision of the task definition, 
+the container within the new revision of the task definition will be pointing to the new tag of the image stored in ECR repo and 
+the ECS Service will be pointing to the latest version of the task definition.
+
+Copy the public IP of the task and verify the ML app is working as expected, as detailed out in C:\Vinod\AWSSagemaker\Deployment\docker\Instructions - docker and ECS.txt.

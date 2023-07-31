@@ -1,0 +1,12 @@
+When a new instance is launched because of a scaling poicy in the ASG associated with the code deployment group, the latest successful deployment id is deployed on the new server as well and only then, the instance launch is marked "Successful".
+
+When a code deployment fails, if automatic rollback is enabled (at ASG level), the previous successful deployment is applied.
+In the case of rolling deployments, the first set of instances where deployment failed is rolled back to previous version and the remaining instances are skipped from the original deployment itself after the deployment failed in the first set. So finally, all instances will have the same older/successful version of the code.
+However, there is a time where reduced number of instances are available for the web traffic - this is the time period between the minute the first set of instances are deregistered from ELB by code deploy and the minute the instances are brought back by ASG with previous successful version deployed.
+In the case of rolling deployments, there can be cases where deployment is successful  on few instances but fails on others, in which case prod might have 2 different versions.
+
+To avoid the problems of rolling deployments, go with Blue/Green deployments.
+A new ASG is provisioned, code is deployed in these, traffic is routed to these and when successful, the old ASG is removed.
+If deployment fails in few or any number of instances on the new ASG, the old ASG does not get deleted and will continue to serve traffic.
+The new ASG instances will be terminated in a few mins.
+Note that previous successful version is not deployed in this new ASG, as in teh case of rolling deployments.

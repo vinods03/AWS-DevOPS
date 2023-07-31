@@ -1,0 +1,17 @@
+version: 0.2
+
+phases:
+    install:
+        runtime-versions: 
+            python: 3.11
+    pre_build:
+        commands:
+            - echo "Nothing to do in pre_build phase"
+    build:
+        commands:
+            - echo "In build phase now - Testing started"
+            - python3 py/handler_unit_test.py
+            - echo "In build phase - Testing over"
+    post_build:
+        commands:
+            - echo "Nothing to do in post_build phase"
