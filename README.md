@@ -1,2 +1,1 @@
-# AWS-DevOPS
-Using AWS Code Commit, Code Build, Code Deploy, ECS, ECR, docker to deploy a machine learning model. 
+Load balancing and auto-scaling are taken care of to ensure high availability.
